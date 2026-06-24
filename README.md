@@ -49,6 +49,19 @@ bconsole
 bacula-dir -tc /etc/bacula/bacula-dir.conf
 ```
 
+## Integrações
+
+### Zabbix → GLPI
+
+O diretório [`zabbix-glpi-integration/`](zabbix-glpi-integration/) contém a automação completa para alertas de backup:
+
+- Script `zabbix-notify.sh` chamado pelo Bacula após cada job (sucesso e falha)
+- Configuração do `RunScript` no `bacula-dir.conf`
+- Triggers no Zabbix com expressões macro
+- Webhook que abre e resolve chamados no GLPI automaticamente
+
+Consulte [`zabbix-glpi-integration/README.md`](zabbix-glpi-integration/README.md) para o passo a passo completo.
+
 ## Referências
 
 - [Documentação oficial do Bacula](https://www.bacula.org/documentation/)
