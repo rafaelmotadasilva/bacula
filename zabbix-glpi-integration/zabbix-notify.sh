@@ -8,6 +8,11 @@ LEVEL="$2"
 BYTES="${3:-0}"
 FILES="${4:-0}"
 
+# Para jobs que falham antes de iniciar a transferência, o Bacula pode passar
+# valores não-numéricos em %b e %f. Sanitizar para evitar strings no DETAIL.
+[[ ! "$BYTES" =~ ^[0-9]+$ ]] && BYTES=0
+[[ ! "$FILES" =~ ^[0-9]+$ ]] && FILES=0
+
 # ── Configuração ─────────────────────────────────────────────────
 ZABBIX_HOST="bacula-fd"          # Nome técnico do host no Zabbix
 ZABBIX_SERVER="127.0.0.1"        # IP ou hostname do Zabbix Server
