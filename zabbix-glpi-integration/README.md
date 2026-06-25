@@ -70,32 +70,41 @@ bacula-dir -tc /opt/bacula/etc/bacula-dir.conf
 echo -e 'reload\nquit' | bconsole
 ```
 
-### 3. Itens Trapper no Zabbix
+### 3. LLD Discovery Rule no Zabbix
 
-Crie os seguintes itens como **Trapper** no host do Bacula:
+O script envia automaticamente dados de discovery para o Zabbix, que cria itens e triggers individuais para cada job. Configure via **Configuração → Hosts → [host do Bacula] → Discovery rules**:
 
-| Chave | Tipo de dado | Descrição |
+| Campo | Valor |
+|---|---|
+| Nome | Bacula Job Discovery |
+| Tipo | Zabbix trapper |
+| Chave | `bacula.job.discovery` |
+| Período de retenção | 30 dias |
+
+### 4. Item Prototypes
+
+Dentro da discovery rule, crie dois item prototypes:
+
+| Chave | Tipo de dado | Tipo |
 |---|---|---|
-| `bacula.full.job.status` | Numérico (0=OK, 1=avisos, 2=falha) | Status do último Full |
-| `bacula.diff.job.status` | Numérico | Status do último Differential |
-| `bacula.incr.job.status` | Numérico | Status do último Incremental |
-| `bacula.job.lastfail` | Texto | Detalhe do último job com falha |
+| `bacula.job.status[{#JOBNAME}]` | Numérico unsigned (0=OK, 1=aviso, 2=falha) | Zabbix trapper |
+| `bacula.job.lastfail[{#JOBNAME}]` | Texto | Zabbix trapper |
 
-### 4. Triggers no Zabbix
+### 5. Trigger Prototype
 
-Crie uma trigger para cada tipo de backup. Use expressão macro no nome para que o detalhe apareça no chamado GLPI:
+Dentro da discovery rule, crie um trigger prototype:
 
 ```
-Nome:       Backup Full FAIL em {HOST.NAME}: {?last(/nome-do-host/bacula.job.lastfail)}
-Expressão:  last(/nome-do-host/bacula.full.job.status) > 0
-Severidade: High
+Nome:       Backup FAIL {#JOBNAME} em {HOST.NAME}: {?last(/nome-do-host/bacula.job.lastfail[{#JOBNAME}])}
+Expressão:  last(/nome-do-host/bacula.job.status[{#JOBNAME}]) > 0
+Severidade: Average
 ```
 
-Repita para `bacula.diff.job.status` e `bacula.incr.job.status`.
+> **Cada job gera seu próprio trigger.** O chamado de `Diretoria-Incr` só fecha
+> quando `Diretoria-Incr` rodar com sucesso — não quando qualquer outro incremental tiver sucesso.
 
-> **Importante:** Use `{?last(...)}` (expressão macro) no nome do trigger.
 > O parâmetro `trigger_name` do webhook GLPI deve usar `{EVENT.NAME}`, não `{TRIGGER.NAME}`,
-> para que a macro de expressão seja resolvida corretamente.
+> para que a expressão macro `{?last(...)}` seja resolvida corretamente.
 
 ### 5. Webhook GLPI no Zabbix
 

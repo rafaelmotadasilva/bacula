@@ -2,14 +2,19 @@
 # Bacula → Zabbix notification script
 # Called via RunScript after each backup job (success and failure)
 # Args: %i (JobID) %l (Level) %b (Bytes) %f (Files)
+#
+# Each job gets its own Zabbix item and trigger via LLD discovery.
+# The trigger for a specific job only recovers when THAT job succeeds,
+# not when any other job of the same type runs.
 
 JOBID="$1"
 LEVEL="$2"
 BYTES="${3:-0}"
 FILES="${4:-0}"
 
-# Para jobs que falham antes de iniciar a transferência, o Bacula pode passar
-# valores não-numéricos em %b e %f. Sanitizar para evitar strings no DETAIL.
+# Sanitizar: garantir que BYTES e FILES sejam numéricos.
+# Para jobs que falham antes de iniciar, o Bacula pode passar
+# valores não-numéricos nesses campos.
 [[ ! "$BYTES" =~ ^[0-9]+$ ]] && BYTES=0
 [[ ! "$FILES" =~ ^[0-9]+$ ]] && FILES=0
 
@@ -32,17 +37,15 @@ if [[ "$LEVEL" != "Full" && "$LEVEL" != "Differential" && "$LEVEL" != "Increment
     exit 0
 fi
 
-case "$LEVEL" in
-    "Full")         ITEM="bacula.full.job.status" ;;
-    "Differential") ITEM="bacula.diff.job.status" ;;
-    "Incremental")  ITEM="bacula.incr.job.status" ;;
-esac
-
 # Consultar nome e status do job no catálogo
 DBINFO=$(PGPASSWORD="$PGPASS" psql -h "$PG_HOST" -U "$PG_USER" -d "$PG_DB" -t -A -F'|' \
     -c "SELECT name, jobstatus FROM job WHERE jobid=$JOBID LIMIT 1;" 2>/dev/null)
 JOBNAME=$(echo "$DBINFO" | cut -d'|' -f1)
 JOBSTATUS=$(echo "$DBINFO" | cut -d'|' -f2)
+
+# Chaves por job — cada job tem seu próprio item e trigger no Zabbix (via LLD)
+STATUS_KEY="bacula.job.status[$JOBNAME]"
+LASTFAIL_KEY="bacula.job.lastfail[$JOBNAME]"
 
 # Mapear status → valor numérico
 # T=OK, C=OK com avisos, qualquer outro=FALHOU
@@ -52,18 +55,27 @@ case "$JOBSTATUS" in
     *)   VALUE=2; STATUS_TEXT="FALHOU ($JOBSTATUS)" ;;
 esac
 
-log "Job $JOBID [$JOBNAME] Level=$LEVEL Status=$JOBSTATUS -> $ITEM=$VALUE (${FILES} arqs, ${BYTES} bytes)"
+log "Job $JOBID [$JOBNAME] Level=$LEVEL Status=$JOBSTATUS -> $STATUS_KEY=$VALUE (${FILES} arqs, ${BYTES} bytes)"
+
+# Enviar discovery para o Zabbix criar o item/trigger automaticamente
+# O Zabbix LLD processa o JSON e cria bacula.job.status[JOBNAME] e
+# bacula.job.lastfail[JOBNAME] como itens individuais para este job.
+DISCOVERY_JSON='[{"{#JOBNAME}":"'"$JOBNAME"'","{#JOBLEVEL}":"'"$LEVEL"'"}]'
+/usr/bin/zabbix_sender -z "$ZABBIX_SERVER" -s "$ZABBIX_HOST" \
+    -k "bacula.job.discovery" -o "$DISCOVERY_JSON" >> "$LOGFILE" 2>&1
 
 # Em caso de falha: enviar texto detalhado ANTES do status numérico
-# O item bacula.job.lastfail é usado nas expressões dos triggers do Zabbix
+# O item bacula.job.lastfail[JOBNAME] é usado na expressão do trigger
 if [ "$VALUE" -gt 0 ]; then
     DETAIL="JobID ${JOBID}: ${JOBNAME} (${LEVEL}) - ${STATUS_TEXT} - Arquivos: ${FILES} - Bytes: ${BYTES}"
-    /usr/bin/zabbix_sender -z "$ZABBIX_SERVER" -s "$ZABBIX_HOST" -k "bacula.job.lastfail" -o "$DETAIL" >> "$LOGFILE" 2>&1
+    /usr/bin/zabbix_sender -z "$ZABBIX_SERVER" -s "$ZABBIX_HOST" \
+        -k "$LASTFAIL_KEY" -o "$DETAIL" >> "$LOGFILE" 2>&1
     log "Detalhe enviado: $DETAIL"
     sleep 1
 fi
 
-# Enviar status numérico (dispara trigger e notificação no Zabbix)
-/usr/bin/zabbix_sender -z "$ZABBIX_SERVER" -s "$ZABBIX_HOST" -k "$ITEM" -o "$VALUE" >> "$LOGFILE" 2>&1
+# Enviar status numérico (dispara ou resolve o trigger deste job específico)
+/usr/bin/zabbix_sender -z "$ZABBIX_SERVER" -s "$ZABBIX_HOST" \
+    -k "$STATUS_KEY" -o "$VALUE" >> "$LOGFILE" 2>&1
 
 exit 0
